@@ -192,9 +192,7 @@ def main():
         hxTrue = np.hstack((hxTrue, xTrue))
         hz = np.hstack((hz, z))
         px, py = get_cov_ellipse(xEst[0, 0], xEst[1, 0], PEst)
-        # print(px.shape, py.shape, np.vstack((px, py)).shape)
         hxCov = np.hstack((hxCov, np.vstack((px, py)).reshape(2, 1, -1)))
-
 
         # if show_animation:
         #     plt.cla()
@@ -220,12 +218,8 @@ def main():
         true, = ax.plot([], [], "-b", label="True Trajectory")
         dead, = ax.plot([], [], "-k", label="Dead Reckoning")
         est, = ax.plot([], [], "-r", label="EKF Estimate")
-
         cov, = ax.plot([], [], "-r", label="EKF Covariance")
-        # hz = np.random.randn(2, 100)
-
         
-        print(hxCov.shape, hz.shape)
         def anim_init():
             ax.axis("equal")
             ax.grid(True)
