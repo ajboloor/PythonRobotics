@@ -13,6 +13,7 @@ sys.path.append(str(pathlib.Path(__file__).parent.parent.parent))
 import math
 import matplotlib.pyplot as plt
 import numpy as np
+np.random.seed(0)
 
 from utils.plot import plot_covariance_ellipse
 
@@ -27,10 +28,11 @@ R = np.diag([1.0, 1.0]) ** 2  # Observation x,y position covariance
 
 #  Simulation parameter
 INPUT_NOISE = np.diag([1.0, np.deg2rad(30.0)]) ** 2
-GPS_NOISE = np.diag([0.5, 0.5]) ** 2
+GPS_NOISE = np.diag([.5, .5]) ** 2
 
-DT = 0.1  # time tick [s]
-SIM_TIME = 50.0  # simulation time [s]
+DT = 1/100 # time tick [s] -> 100Hz
+GPS_UPDATE = 1/30 # GPS update frequency [s] -> 10Hz
+SIM_TIME = 60.0  # simulation time [s]
 
 show_animation = True
 
@@ -119,20 +121,24 @@ def jacob_h():
     return jH
 
 
-def ekf_estimation(xEst, PEst, z, u):
+def ekf_estimation(xEst, PEst, z, u, update=True):
     #  Predict
     xPred = motion_model(xEst, u)
     jF = jacob_f(xEst, u)
     PPred = jF @ PEst @ jF.T + Q
 
     #  Update
-    jH = jacob_h()
-    zPred = observation_model(xPred)
-    y = z - zPred
-    S = jH @ PPred @ jH.T + R
-    K = PPred @ jH.T @ np.linalg.inv(S)
-    xEst = xPred + K @ y
-    PEst = (np.eye(len(xEst)) - K @ jH) @ PPred
+    if update:
+        jH = jacob_h()
+        zPred = observation_model(xPred)
+        y = z - zPred
+        S = jH @ PPred @ jH.T + R
+        K = PPred @ jH.T @ np.linalg.inv(S)
+        xEst = xPred + K @ y
+        PEst = (np.eye(len(xEst)) - K @ jH) @ PPred
+    else:
+        xEst = xPred
+        PEst = PPred
     return xEst, PEst
 
 from utils.angle import rot_mat_2d
@@ -178,13 +184,25 @@ def main():
     hz = np.zeros((2, 1))
     hxCov = np.zeros((2, 1, 64))
 
+    prev_z = np.zeros((2, 1))
+
+    i = 0
+
+    update_idx = GPS_UPDATE / DT
     while SIM_TIME >= time:
         time += DT
+        i+=1
         u = calc_input()
 
         xTrue, z, xDR, ud = observation(xTrue, xDR, u)
-
-        xEst, PEst = ekf_estimation(xEst, PEst, z, ud)
+        # print(time, GPS_UPDATE, time % GPS_UPDATE)
+        if i % update_idx <= 1e-9:
+            # print('Sensor update!')
+            xEst, PEst = ekf_estimation(xEst, PEst, z, ud, update=True)
+        else:
+            xEst, PEst = ekf_estimation(xEst, PEst, None, ud, update=False)
+            # print(z.shape)
+            z = np.array([[None, None]]).reshape(2, 1)
 
         # store data history
         hxEst = np.hstack((hxEst, xEst))
@@ -194,22 +212,11 @@ def main():
         px, py = get_cov_ellipse(xEst[0, 0], xEst[1, 0], PEst)
         hxCov = np.hstack((hxCov, np.vstack((px, py)).reshape(2, 1, -1)))
 
-        # if show_animation:
-        #     plt.cla()
-        #     # for stopping simulation with the esc key.
-        #     plt.gcf().canvas.mpl_connect('key_release_event',
-        #             lambda event: [exit(0) if event.key == 'escape' else None])
-        #     plt.plot(hz[0, :], hz[1, :], ".g")
-        #     plt.plot(hxTrue[0, :].flatten(),
-        #              hxTrue[1, :].flatten(), "-b")
-        #     plt.plot(hxDR[0, :].flatten(),
-        #              hxDR[1, :].flatten(), "-k")
-        #     plt.plot(hxEst[0, :].flatten(),
-        #              hxEst[1, :].flatten(), "-r")
-        #     plot_covariance_ellipse(xEst[0, 0], xEst[1, 0], PEst)
-        #     plt.axis("equal")
-        #     plt.grid(True)
-        #     plt.pause(0.001)
+    err = np.abs(hxTrue - hxEst)
+    print(err.shape)
+    print(err[0].mean(), err[1].mean(), err[2].mean(), err[3].mean())
+    print(err[0].std(), err[1].std(), err[2].std(), err[3].std())
+    print((err[0]**2).mean(), (err[1]**2).mean(), (err[2]**2).mean(), (err[3]**2).mean())
 
     if show_animation:
         from matplotlib.animation import FuncAnimation
@@ -218,15 +225,20 @@ def main():
         true, = ax.plot([], [], "-b", label="True Trajectory")
         dead, = ax.plot([], [], "-k", label="Dead Reckoning")
         est, = ax.plot([], [], "-r", label="EKF Estimate")
-        cov, = ax.plot([], [], "-r", label="EKF Covariance")
+        cov, = ax.plot([], [], "-y")
+        
+        title = ax.text(0, -10, "time=0.0s", horizontalalignment='center',
+                        bbox={'facecolor':'w', 'alpha':0.5, 'pad':5},)
         
         def anim_init():
-            ax.axis("equal")
+
+            # ax.axis("equal")
+            ax.set_aspect('equal', 'box')
+            ax.set_xlim(-25, 25)
+            ax.set_ylim(-20, 30)
             ax.grid(True)
-            ax.set_xlim(-20, 20)
-            ax.set_ylim(-10, 30)
             ax.legend(ncol=2, loc="lower center")
-            return meas, true, dead, est, cov,
+            return meas, true, dead, est, cov, title,
     
         def animate(i):
             # ln.set_data(hxTrue[0, i:].flatten(), hxTrue[1, i:].flatten())
@@ -235,10 +247,11 @@ def main():
             dead.set_data(hxDR[0, :i].flatten(), hxDR[1, :i].flatten())
             est.set_data(hxEst[0, :i].flatten(), hxEst[1, :i].flatten())
             cov.set_data(hxCov[0, i].flatten(), hxCov[1, i].flatten())
-            return meas, true, dead, est, cov,
+            title.set_text('time = {:.1f}s'.format(i*DT))
+            return meas, true, dead, est, cov, title,
     
         anim = FuncAnimation(fig, animate, frames=range(len(hz[0, :])),
-                    init_func=anim_init, blit=True, interval=10, repeat=False)
+                    init_func=anim_init, blit=True, interval=1, repeat=False)
         plt.show()
         
 
